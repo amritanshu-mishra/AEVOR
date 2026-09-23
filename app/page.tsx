@@ -1,4 +1,20 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import { auth } from "@/lib/firebase/client";
+
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+
+    return unsubscribe;
+  }, []);
+
   return (
     <main className="min-h-screen bg-[#F7F7F3] text-[#17211C]">
       {/* Navigation */}
@@ -7,25 +23,43 @@ export default function Home() {
           <div className="text-xl font-semibold tracking-[0.18em] text-[#12352B]">
             AEVOR
           </div>
+
           <div className="mt-1 text-[9px] tracking-[0.28em] text-[#6B746F]">
             PURPOSE OVER NOISE.
           </div>
         </div>
 
         <div className="flex items-center gap-3">
-          <a
-            href="/login"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium text-[#12352B] transition hover:bg-[#E9EEEA]"
-          >
-            Sign in
-          </a>
+          {user ? (
+            <>
+              <span className="hidden max-w-[220px] truncate text-sm text-[#5E6963] sm:block">
+                {user.displayName || user.email}
+              </span>
 
-          <a
-            href="/login"
-            className="rounded-xl bg-[#12352B] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[#0B211A]"
-          >
-            Get started
-          </a>
+              <button
+                onClick={() => signOut(auth)}
+                className="rounded-xl px-5 py-2.5 text-sm font-medium text-[#12352B] transition hover:bg-[#E9EEEA]"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <>
+              <a
+                href="/login"
+                className="rounded-xl px-5 py-2.5 text-sm font-medium text-[#12352B] transition hover:bg-[#E9EEEA]"
+              >
+                Sign in
+              </a>
+
+              <a
+                href="/login"
+                className="rounded-xl bg-[#12352B] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[#0B211A]"
+              >
+                Get started
+              </a>
+            </>
+          )}
         </div>
       </nav>
 
@@ -38,7 +72,9 @@ export default function Home() {
 
           <h1 className="max-w-4xl text-5xl font-semibold leading-[1.02] tracking-[-0.04em] md:text-7xl">
             Turn ambition into
-            <span className="block text-[#12352B]">measurable progress.</span>
+            <span className="block text-[#12352B]">
+              measurable progress.
+            </span>
           </h1>
 
           <p className="mt-8 max-w-2xl text-lg leading-8 text-[#5E6963] md:text-xl">
@@ -49,10 +85,10 @@ export default function Home() {
 
           <div className="mt-10 flex flex-wrap gap-4">
             <a
-              href="/login"
+              href={user ? "#" : "/login"}
               className="rounded-xl bg-[#12352B] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#0B211A]"
             >
-              Start with Aevor
+              {user ? "Continue with Aevor" : "Start with Aevor"}
             </a>
 
             <a
@@ -98,9 +134,11 @@ export default function Home() {
                 className="rounded-2xl border border-[#DDE2DE] bg-[#F7F7F3] p-6"
               >
                 <div className="text-sm text-[#B99A5B]">{number}</div>
+
                 <h3 className="mt-8 text-xl font-semibold text-[#12352B]">
                   {title}
                 </h3>
+
                 <p className="mt-3 text-sm leading-6 text-[#5E6963]">
                   {text}
                 </p>
@@ -126,13 +164,14 @@ export default function Home() {
         </p>
 
         <a
-          href="/login"
+          href={user ? "#" : "/login"}
           className="mt-8 inline-block rounded-xl bg-[#12352B] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#0B211A]"
         >
-          Enter Aevor
+          {user ? "Enter Aevor" : "Enter Aevor"}
         </a>
       </section>
 
+      {/* Footer */}
       <footer className="border-t border-[#DDE2DE] px-6 py-8 text-center text-xs text-[#89918C]">
         © {new Date().getFullYear()} AEVOR
       </footer>
