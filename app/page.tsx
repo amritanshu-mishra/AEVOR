@@ -85,7 +85,7 @@ export default function Home() {
 
           <div className="mt-10 flex flex-wrap gap-4">
             <a
-              href={user ? "#" : "/login"}
+              href={user ? "/home" : "/login"}
               className="rounded-xl bg-[#12352B] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#0B211A]"
             >
               {user ? "Continue with Aevor" : "Start with Aevor"}
@@ -164,7 +164,7 @@ export default function Home() {
         </p>
 
         <a
-          href={user ? "#" : "/login"}
+          href={user ? "/home" : "/login"}
           className="mt-8 inline-block rounded-xl bg-[#12352B] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#0B211A]"
         >
           {user ? "Enter Aevor" : "Enter Aevor"}

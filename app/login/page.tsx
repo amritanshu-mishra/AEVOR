@@ -28,7 +28,7 @@ export default function LoginPage() {
         await createUserWithEmailAndPassword(auth, email, password);
       }
 
-      window.location.href = "/";
+      window.location.href = "/home";
     } catch {
       setError(
         mode === "login"
