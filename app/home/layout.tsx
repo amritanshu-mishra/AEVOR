@@ -4,6 +4,7 @@ import { useEffect, useState, ReactNode } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/lib/firebase/client";
+import AppShell from "@/components/aevor/AppShell";
 
 export default function HomeLayout({
   children,
@@ -33,5 +34,5 @@ export default function HomeLayout({
     );
   }
 
-  return <>{children}</>;
+  return <AppShell>{children}</AppShell>;
 }
