@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
@@ -9,11 +11,13 @@ import {
 } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
 
+
 export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
 
   async function handleEmailAuth(e: FormEvent<HTMLFormElement>) {
@@ -28,7 +32,7 @@ export default function LoginPage() {
         await createUserWithEmailAndPassword(auth, email, password);
       }
 
-      window.location.href = "/home";
+      router.push("/home");
     } catch {
       setError(
         mode === "login"
@@ -47,7 +51,7 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      window.location.href = "/";
+      router.push("/home");
     } catch {
       setError("Google sign-in could not be completed.");
     } finally {
@@ -60,12 +64,12 @@ export default function LoginPage() {
       <div className="mx-auto flex min-h-[80vh] max-w-md items-center justify-center">
         <div className="w-full">
           <div className="mb-10 text-center">
-            <a
-              href="/"
-              className="text-2xl font-semibold tracking-[0.25em] text-[#12352B]"
-            >
-              AEVOR
-            </a>
+            <Link
+            href="/"
+            className="text-2xl font-semibold tracking-[0.25em] text-[#12352B]"
+>
+  AEVOR
+</Link>
 
             <p className="mt-2 text-xs tracking-[0.25em] text-[#5E6963]">
               PURPOSE OVER NOISE.
