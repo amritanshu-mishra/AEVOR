@@ -1,504 +1,727 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api/client";
 import FocusAnalytics from "@/components/aevor/FocusAnalytics";
 
+type GoalStatus = "active" | "completed" | "paused" | "archived";
+type MilestoneStatus =
+  | "active"
+  | "completed"
+  | "paused"
+  | "archived";
 type MissionStatus = "planned" | "completed" | "cancelled";
+
+type Goal = {
+  id: string;
+  title: string;
+  status: GoalStatus;
+};
+
+type Milestone = {
+  id: string;
+  goalId: string;
+  title: string;
+  status: MilestoneStatus;
+};
 
 type Mission = {
   id: string;
   title: string;
   description: string | null;
+  dueAt: string | null;
   status: MissionStatus;
+  milestoneId: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type FocusSession = {
   id: string;
+  userId: string;
   missionId: string | null;
   subject: string;
   startedAt: string;
   endedAt: string | null;
   durationSeconds: number;
   status: "active" | "completed" | "cancelled";
-};
-
-type FocusData = {
-  sessions: FocusSession[];
-  active: FocusSession | null;
-};
-
-const emptyFocusData: FocusData = {
-  sessions: [],
-  active: null,
+  createdAt: string;
 };
 
 function formatTime(seconds: number) {
-  return [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60]
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  return [hours, minutes, remainingSeconds]
     .map((value) => String(value).padStart(2, "0"))
     .join(":");
 }
 
+function formatDueAt(date: string | null) {
+  if (!date) return "No deadline";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(date));
+}
+
 export default function ExecutePage() {
   const [missions, setMissions] = useState<Mission[]>([]);
-  const [focusData, setFocusData] = useState<FocusData>(emptyFocusData);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [focusSessions, setFocusSessions] = useState<FocusSession[]>([]);
+  const [activeFocus, setActiveFocus] = useState<FocusSession | null>(null);
 
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [selectedMissionId, setSelectedMissionId] = useState("");
-  const [subject, setSubject] = useState("");
+  const [missionTitle, setMissionTitle] = useState("");
+  const [missionDescription, setMissionDescription] = useState("");
+  const [missionDueAt, setMissionDueAt] = useState("");
+  const [selectedGoalId, setSelectedGoalId] = useState("");
+  const [selectedMilestoneId, setSelectedMilestoneId] = useState("");
+
+  const [focusSubject, setFocusSubject] = useState("");
+  const [selectedFocusMissionId, setSelectedFocusMissionId] =
+    useState("");
 
   const [elapsed, setElapsed] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [creatingMission, setCreatingMission] = useState(false);
+  const [startingFocus, setStartingFocus] = useState(false);
+  const [stoppingFocus, setStoppingFocus] = useState(false);
   const [error, setError] = useState("");
 
-  const activeSession = focusData.active;
+  const availableMilestones = useMemo(
+    () =>
+      milestones.filter(
+        (milestone) =>
+          milestone.goalId === selectedGoalId &&
+          milestone.status === "active",
+      ),
+    [milestones, selectedGoalId],
+  );
+
+  const goalById = useMemo(
+    () => new Map(goals.map((goal) => [goal.id, goal])),
+    [goals],
+  );
+
+  const milestoneById = useMemo(
+    () =>
+      new Map(
+        milestones.map((milestone) => [milestone.id, milestone]),
+      ),
+    [milestones],
+  );
+
+  const selectedFocusMission = missions.find(
+    (mission) => mission.id === selectedFocusMissionId,
+  );
+
+  const openMissions = missions.filter(
+    (mission) => mission.status === "planned",
+  );
+
+  const completedMissions = missions.filter(
+    (mission) => mission.status === "completed",
+  );
 
   useEffect(() => {
+    let cancelled = false;
+
     Promise.all([
-      apiFetch("/api/v1/missions").then(async (response) => {
-        if (!response.ok) throw new Error("Could not load missions");
-        return response.json();
-      }),
-      apiFetch("/api/v1/focus").then(async (response) => {
-        if (!response.ok) throw new Error("Could not load focus data");
-        return response.json();
-      }),
+      apiFetch("/api/v1/missions"),
+      apiFetch("/api/v1/goals"),
+      apiFetch("/api/v1/milestones"),
+      apiFetch("/api/v1/focus"),
     ])
-      .then(([missionData, focus]) => {
+      .then(async ([missionsResponse, goalsResponse, milestonesResponse, focusResponse]) => {
+        if (
+          !missionsResponse.ok ||
+          !goalsResponse.ok ||
+          !milestonesResponse.ok ||
+          !focusResponse.ok
+        ) {
+          throw new Error("Failed to load execution data");
+        }
+
+        const [missionData, goalData, milestoneData, focusData] =
+          await Promise.all([
+            missionsResponse.json(),
+            goalsResponse.json(),
+            milestonesResponse.json(),
+            focusResponse.json(),
+          ]);
+
+        if (cancelled) return;
+
         setMissions(missionData);
-        setFocusData(focus);
+        setGoals(goalData);
+        setMilestones(milestoneData);
+        setFocusSessions(focusData.sessions);
+        setActiveFocus(focusData.active);
       })
-      .catch((error) =>
-        setError(
-          error instanceof Error ? error.message : "Could not load Execute",
-        ),
-      )
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!cancelled) {
+          setError("Unable to load your execution data.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeFocus) return;
 
-    const update = () => {
+    const interval = window.setInterval(() => {
+      const startedAt = new Date(activeFocus.startedAt).getTime();
+
       setElapsed(
         Math.max(
           0,
-          Math.floor(
-            (Date.now() - new Date(activeSession.startedAt).getTime()) / 1000,
-          ),
+          Math.floor((Date.now() - startedAt) / 1000),
         ),
       );
-    };
+    }, 1000);
 
-    update();
-
-    const interval = setInterval(update, 1000);
-
-    return () => clearInterval(interval);
-  }, [activeSession]);
+    return () => window.clearInterval(interval);
+  }, [activeFocus]);
 
   async function createMission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const missionTitle = title.trim();
-
-    if (!missionTitle) {
-      setError("Enter a mission title.");
-      return;
-    }
-
-    setCreating(true);
-    setError("");
+    if (!missionTitle.trim()) return;
 
     try {
+      setCreatingMission(true);
+      setError("");
+
       const response = await apiFetch("/api/v1/missions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          title: missionTitle,
-          description: description.trim() || undefined,
+          title: missionTitle.trim(),
+          description: missionDescription.trim() || undefined,
+          dueAt: missionDueAt
+            ? new Date(missionDueAt).toISOString()
+            : undefined,
+          milestoneId: selectedMilestoneId || null,
         }),
       });
 
-      const mission = await response.json();
-
       if (!response.ok) {
-        throw new Error(mission.error || "Could not create mission");
+        throw new Error("Failed to create mission");
       }
+
+      const mission: Mission = await response.json();
 
       setMissions((current) => [mission, ...current]);
-      setTitle("");
-      setDescription("");
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not create mission",
-      );
+      setMissionTitle("");
+      setMissionDescription("");
+      setMissionDueAt("");
+      setSelectedGoalId("");
+      setSelectedMilestoneId("");
+    } catch {
+      setError("Unable to create the mission.");
     } finally {
-      setCreating(false);
+      setCreatingMission(false);
     }
   }
 
-  async function completeMission(missionId: string) {
-    setError("");
-
+  async function updateMission(
+    id: string,
+    status: MissionStatus,
+  ) {
     try {
-      const response = await apiFetch(`/api/v1/missions/${missionId}`, {
+      setError("");
+
+      const response = await apiFetch(`/api/v1/missions/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "completed" }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ status }),
       });
 
-      const mission = await response.json();
-
       if (!response.ok) {
-        throw new Error(mission.error || "Could not complete mission");
+        throw new Error("Failed to update mission");
       }
 
+      const updatedMission: Mission = await response.json();
+
       setMissions((current) =>
-        current.map((item) => (item.id === mission.id ? mission : item)),
+        current.map((mission) =>
+          mission.id === id ? updatedMission : mission,
+        ),
       );
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not complete mission",
-      );
+    } catch {
+      setError("Unable to update the mission.");
     }
   }
 
-  function selectMission(mission: Mission) {
-    setSelectedMissionId(mission.id);
-    setSubject(mission.title);
-  }
+  async function startFocus() {
+    const subject = focusSubject.trim();
 
-  async function startFocus(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const mission = missions.find((item) => item.id === selectedMissionId);
-    const focusSubject = subject.trim() || mission?.title;
-
-    if (!focusSubject) {
-      setError("Select a mission or enter what you are working on.");
-      return;
-    }
-
-    setError("");
+    if (!subject || activeFocus) return;
 
     try {
+      setStartingFocus(true);
+      setError("");
+
       const response = await apiFetch("/api/v1/focus", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          subject: focusSubject,
-          missionId: selectedMissionId || undefined,
+          subject,
+          missionId: selectedFocusMissionId || undefined,
         }),
       });
 
-      const session = await response.json();
-
       if (!response.ok) {
-        throw new Error(session.error || "Could not start focus");
+        throw new Error("Failed to start focus");
       }
 
-      setFocusData((current) => ({
-        ...current,
-        active: session,
-      }));
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not start focus",
-      );
+      const session: FocusSession = await response.json();
+
+      setActiveFocus(session);
+      setElapsed(0);
+    } catch {
+      setError("Unable to start the focus session.");
+    } finally {
+      setStartingFocus(false);
     }
   }
 
   async function stopFocus() {
-    if (!activeSession) return;
-
-    setError("");
+    if (!activeFocus) return;
 
     try {
-      const response = await apiFetch(
-        `/api/v1/focus/${activeSession.id}/stop`,
-        { method: "POST" },
-      );
+      setStoppingFocus(true);
+      setError("");
 
-      const session = await response.json();
+      const response = await apiFetch(
+        `/api/v1/focus/${activeFocus.id}/stop`,
+        {
+          method: "POST",
+        },
+      );
 
       if (!response.ok) {
-        throw new Error(session.error || "Could not stop focus");
+        throw new Error("Failed to stop focus");
       }
 
-      setFocusData((current) => ({
-        active: null,
-        sessions: [session, ...current.sessions],
-      }));
+      const completedSession: FocusSession =
+        await response.json();
+
+      setFocusSessions((current) => [
+        completedSession,
+        ...current,
+      ]);
+      setActiveFocus(null);
       setElapsed(0);
-      setSelectedMissionId("");
-      setSubject("");
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not stop focus",
-      );
+    } catch {
+      setError("Unable to stop the focus session.");
+    } finally {
+      setStoppingFocus(false);
     }
   }
 
-  if (loading) {
-    return (
-      <section className="flex min-h-[70vh] items-center justify-center bg-[#F7F7F3]">
-        <p className="text-sm text-[#5E6963]">Loading Aevor...</p>
-      </section>
-    );
+  function focusMission(mission: Mission) {
+    setSelectedFocusMissionId(mission.id);
+    setFocusSubject(mission.title);
   }
 
-  const completed = missions.filter(
-    (mission) => mission.status === "completed",
-  ).length;
-
-  const progress = missions.length
-    ? Math.round((completed / missions.length) * 100)
-    : 0;
-
-  const planned = missions.filter(
-    (mission) => mission.status === "planned",
-  ).length;
-
   return (
-    <section className="min-h-screen bg-[#F7F7F3]">
-      <div className="mx-auto max-w-7xl px-6 py-10 lg:px-10">
-        <header>
-          <p className="text-xs font-semibold tracking-[0.22em] text-[#B99A5B]">
-            EXECUTE
-          </p>
+    <section className="mx-auto max-w-7xl px-6 py-10 lg:px-10">
+      <header>
+        <p className="text-xs font-semibold tracking-[0.2em] text-[#B99A5B]">
+          EXECUTION
+        </p>
 
-          <div className="mt-3 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h1 className="text-4xl font-semibold tracking-[-0.05em] text-[#17211C] md:text-6xl">
-                Do the work.
-              </h1>
+        <h1 className="mt-3 text-4xl font-semibold tracking-[-0.04em] text-[#12352B] md:text-5xl">
+          Execute
+        </h1>
 
-              <p className="mt-4 text-[#5E6963]">
-                Turn intention into measurable action.
-              </p>
-            </div>
+        <p className="mt-4 max-w-2xl text-[#5E6963]">
+          Turn your plans into focused work.
+        </p>
+      </header>
 
-            <p className="text-sm text-[#89918C]">
-              {planned} {planned === 1 ? "mission" : "missions"} remaining
+      {error && (
+        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-10 grid gap-6 lg:grid-cols-[380px_1fr]">
+        <div className="space-y-6">
+          <form
+            onSubmit={createMission}
+            className="rounded-2xl border border-[#DDE2DE] bg-white p-6"
+          >
+            <p className="text-xs font-semibold tracking-[0.18em] text-[#B99A5B]">
+              NEW MISSION
             </p>
-          </div>
-        </header>
 
-        {error && (
-          <div className="mt-6 rounded-xl border border-[#E8C7C5] bg-[#FBEDEC] px-4 py-3 text-sm text-[#B94A48]">
-            {error}
-          </div>
-        )}
+            <div className="mt-5 space-y-4">
+              <select
+                value={selectedGoalId}
+                onChange={(event) => {
+                  setSelectedGoalId(event.target.value);
+                  setSelectedMilestoneId("");
+                }}
+                className="w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+              >
+                <option value="">
+                  No goal — standalone mission
+                </option>
 
-        <div className="mt-10 grid gap-5 lg:grid-cols-[1.55fr_1fr]">
-          {/* Missions */}
-          <section className="overflow-hidden rounded-[24px] border border-[#DDE2DE] bg-white">
-            <div className="flex items-center justify-between border-b border-[#DDE2DE] px-6 py-5 md:px-8">
+                {goals
+                  .filter((goal) => goal.status === "active")
+                  .map((goal) => (
+                    <option key={goal.id} value={goal.id}>
+                      {goal.title}
+                    </option>
+                  ))}
+              </select>
+
+              {selectedGoalId && (
+                <select
+                  value={selectedMilestoneId}
+                  onChange={(event) =>
+                    setSelectedMilestoneId(event.target.value)
+                  }
+                  className="w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+                >
+                  <option value="">No milestone</option>
+
+                  {availableMilestones.map((milestone) => (
+                    <option
+                      key={milestone.id}
+                      value={milestone.id}
+                    >
+                      {milestone.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <input
+                value={missionTitle}
+                onChange={(event) =>
+                  setMissionTitle(event.target.value)
+                }
+                placeholder="What will you do?"
+                className="w-full rounded-xl border border-[#DDE2DE] px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+              />
+
+              <textarea
+                value={missionDescription}
+                onChange={(event) =>
+                  setMissionDescription(event.target.value)
+                }
+                placeholder="Add context..."
+                rows={3}
+                className="w-full resize-none rounded-xl border border-[#DDE2DE] px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+              />
+
+              <input
+                type="datetime-local"
+                value={missionDueAt}
+                onChange={(event) =>
+                  setMissionDueAt(event.target.value)
+                }
+                className="w-full rounded-xl border border-[#DDE2DE] px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+              />
+
+              <button
+                type="submit"
+                disabled={
+                  creatingMission || !missionTitle.trim()
+                }
+                className="w-full rounded-xl bg-[#12352B] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0B211A] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creatingMission
+                  ? "Creating..."
+                  : "Create mission"}
+              </button>
+            </div>
+          </form>
+
+          <div className="rounded-2xl bg-[#12352B] p-6 text-white">
+            <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold tracking-[0.16em] text-[#89918C]">
-                  TODAY&apos;S MISSIONS
+                <p className="text-xs font-semibold tracking-[0.18em] text-[#D8C38E]">
+                  FOCUS
                 </p>
 
-                <h2 className="mt-2 text-2xl font-semibold text-[#12352B]">
-                  {missions.length}{" "}
-                  {missions.length === 1 ? "mission" : "missions"}
+                <h2 className="mt-2 text-xl font-semibold">
+                  {activeFocus
+                    ? activeFocus.subject
+                    : "Ready when you are."}
                 </h2>
               </div>
 
-              <span className="text-sm font-medium text-[#B99A5B]">
-                {progress}%
-              </span>
+              {activeFocus && (
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs">
+                  Active
+                </span>
+              )}
             </div>
 
-            <div className="divide-y divide-[#EEF1EE]">
-              {missions.length === 0 ? (
-                <div className="px-6 py-12 text-center md:px-8">
-                  <p className="font-semibold text-[#12352B]">
-                    Start with one meaningful mission.
+            <p className="mt-6 font-mono text-4xl tracking-tight">
+              {formatTime(elapsed)}
+            </p>
+
+            {activeFocus ? (
+              <button
+                onClick={() => void stopFocus()}
+                disabled={stoppingFocus}
+                className="mt-6 w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[#12352B] disabled:opacity-50"
+              >
+                {stoppingFocus ? "Stopping..." : "Stop focus"}
+              </button>
+            ) : (
+              <div className="mt-5 space-y-3">
+                <input
+                  value={focusSubject}
+                  onChange={(event) =>
+                    setFocusSubject(event.target.value)
+                  }
+                  placeholder="What are you working on?"
+                  className="w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white placeholder:text-white/50 outline-none focus:border-white/40"
+                />
+
+                <select
+                  value={selectedFocusMissionId}
+                  onChange={(event) => {
+                    const missionId = event.target.value;
+
+                    setSelectedFocusMissionId(missionId);
+
+                    const mission = missions.find(
+                      (item) => item.id === missionId,
+                    );
+
+                    if (mission) {
+                      setFocusSubject(mission.title);
+                    }
+                  }}
+                  className="w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none focus:border-white/40"
+                >
+                  <option
+                    value=""
+                    className="text-[#12352B]"
+                  >
+                    Standalone focus
+                  </option>
+
+                  {openMissions.map((mission) => (
+                    <option
+                      key={mission.id}
+                      value={mission.id}
+                      className="text-[#12352B]"
+                    >
+                      {mission.title}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={() => void startFocus()}
+                  disabled={
+                    startingFocus || !focusSubject.trim()
+                  }
+                  className="w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[#12352B] disabled:opacity-50"
+                >
+                  {startingFocus
+                    ? "Starting..."
+                    : "Start focus"}
+                </button>
+              </div>
+            )}
+
+            {selectedFocusMission && !activeFocus && (
+              <p className="mt-4 text-xs text-white/60">
+                Linked to: {selectedFocusMission.title}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-[#DDE2DE] bg-white p-5">
+              <p className="text-sm text-[#89918C]">
+                Open missions
+              </p>
+
+              <p className="mt-2 text-3xl font-semibold text-[#12352B]">
+                {openMissions.length}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-[#DDE2DE] bg-white p-5">
+              <p className="text-sm text-[#89918C]">
+                Completed
+              </p>
+
+              <p className="mt-2 text-3xl font-semibold text-[#12352B]">
+                {completedMissions.length}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#DDE2DE] bg-white p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold tracking-[0.18em] text-[#B99A5B]">
+                  MISSIONS
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-[#12352B]">
+                  What needs to be done
+                </h2>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {loading ? (
+                <p className="py-6 text-sm text-[#89918C]">
+                  Loading missions...
+                </p>
+              ) : missions.length === 0 ? (
+                <div className="rounded-xl bg-[#F7F8F6] p-6">
+                  <p className="font-medium text-[#12352B]">
+                    Nothing here yet.
                   </p>
 
                   <p className="mt-2 text-sm text-[#5E6963]">
-                    Decide what matters today and put it into motion.
+                    Create a mission and start executing.
                   </p>
                 </div>
               ) : (
                 missions.map((mission) => {
-                  const completed = mission.status === "completed";
+                  const milestone = mission.milestoneId
+                    ? milestoneById.get(mission.milestoneId)
+                    : undefined;
+
+                  const goal = milestone
+                    ? goalById.get(milestone.goalId)
+                    : undefined;
+
+                  const completed =
+                    mission.status === "completed";
 
                   return (
                     <article
                       key={mission.id}
-                      className="flex items-center gap-4 px-6 py-5 md:px-8"
+                      className="rounded-xl border border-[#EEF1EE] p-4"
                     >
-                      <button
-                        type="button"
-                        disabled={completed}
-                        onClick={() => completeMission(mission.id)}
-                        aria-label={
-                          completed
-                            ? `${mission.title} completed`
-                            : `Complete ${mission.title}`
-                        }
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition ${
-                          completed
-                            ? "border-[#12352B] bg-[#12352B] text-white"
-                            : "border-[#B99A5B] hover:bg-[#F0F2EF]"
-                        }`}
-                      >
-                        {completed && "✓"}
-                      </button>
-
-                      <div className="min-w-0 flex-1">
-                        <h3
-                          className={`font-semibold ${
-                            completed
-                              ? "text-[#89918C] line-through"
-                              : "text-[#12352B]"
-                          }`}
-                        >
-                          {mission.title}
-                        </h3>
-
-                        {mission.description && (
-                          <p className="mt-1 text-sm text-[#5E6963]">
-                            {mission.description}
-                          </p>
-                        )}
-
-                        <span className="mt-2 inline-flex rounded-full bg-[#F0F2EF] px-3 py-1 text-xs capitalize text-[#5E6963]">
-                          {mission.status}
-                        </span>
-                      </div>
-
-                      {!completed && !activeSession && (
+                      <div className="flex items-start gap-4">
                         <button
                           type="button"
-                          onClick={() => selectMission(mission)}
-                          className="rounded-lg px-3 py-2 text-xs font-medium text-[#12352B] hover:bg-[#F0F2EF]"
+                          onClick={() =>
+                            void updateMission(
+                              mission.id,
+                              completed
+                                ? "planned"
+                                : "completed",
+                            )
+                          }
+                          aria-label={
+                            completed
+                              ? "Reopen mission"
+                              : "Complete mission"
+                          }
+                          className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${
+                            completed
+                              ? "border-[#2F7D5B] bg-[#2F7D5B] text-white"
+                              : "border-[#C8D0CA] hover:border-[#12352B]"
+                          }`}
                         >
-                          Focus
+                          {completed && (
+                            <span className="text-xs">
+                              ✓
+                            </span>
+                          )}
                         </button>
-                      )}
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <h3
+                                className={`font-semibold ${
+                                  completed
+                                    ? "text-[#89918C] line-through"
+                                    : "text-[#12352B]"
+                                }`}
+                              >
+                                {mission.title}
+                              </h3>
+
+                              {mission.description && (
+                                <p className="mt-1 text-sm leading-6 text-[#5E6963]">
+                                  {mission.description}
+                                </p>
+                              )}
+                            </div>
+
+                            {!completed && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  focusMission(mission)
+                                }
+                                disabled={Boolean(activeFocus)}
+                                className="shrink-0 rounded-lg border border-[#C8D0CA] px-3 py-2 text-xs font-semibold text-[#12352B] hover:bg-[#F0F2EF] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Focus
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#89918C]">
+                            {goal && (
+                              <span>
+                                Goal: {goal.title}
+                              </span>
+                            )}
+
+                            {milestone && (
+                              <span>
+                                Milestone: {milestone.title}
+                              </span>
+                            )}
+
+                            <span>
+                              {formatDueAt(mission.dueAt)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </article>
                   );
                 })
               )}
             </div>
+          </div>
 
-            <form
-              onSubmit={createMission}
-              className="border-t border-[#DDE2DE] bg-[#F7F7F3] p-5 md:p-6"
-            >
-              <p className="text-xs font-semibold tracking-[0.16em] text-[#89918C]">
-                NEW MISSION
-              </p>
-
-              <div className="mt-3 flex gap-3">
-                <input
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  placeholder="What will you accomplish?"
-                  className="min-w-0 flex-1 rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm text-[#17211C] outline-none focus:border-[#12352B]"
-                />
-
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="rounded-xl bg-[#12352B] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0B211A] disabled:opacity-60"
-                >
-                  {creating ? "..." : "Add"}
-                </button>
-              </div>
-
-              <input
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Optional description"
-                className="mt-3 w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm text-[#17211C] outline-none focus:border-[#12352B]"
-              />
-            </form>
-          </section>
-
-          {/* Focus */}
-          <aside>
-            <section className="rounded-[24px] bg-[#12352B] p-7 text-white">
-              <p className="text-xs font-semibold tracking-[0.16em] text-[#D5C08D]">
-                FOCUS
-              </p>
-
-              {activeSession ? (
-                <>
-                  <p className="mt-6 truncate text-sm text-white/70">
-                    {activeSession.subject}
-                  </p>
-
-                  <p className="mt-3 text-5xl font-semibold tracking-[-0.05em]">
-                    {formatTime(elapsed)}
-                  </p>
-
-                  <p className="mt-2 text-sm text-white/60">
-                    Focus in progress.
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={stopFocus}
-                    className="mt-8 w-full rounded-xl bg-white px-5 py-3.5 text-sm font-semibold text-[#12352B] transition hover:bg-[#F0F2EF]"
-                  >
-                    Stop focus
-                  </button>
-                </>
-              ) : (
-                <form onSubmit={startFocus}>
-                  <select
-                    value={selectedMissionId}
-                    onChange={(event) => {
-                      const id = event.target.value;
-                      setSelectedMissionId(id);
-
-                      const mission = missions.find(
-                        (item) => item.id === id,
-                      );
-
-                      setSubject(mission?.title ?? "");
-                    }}
-                    className="mt-6 w-full rounded-xl border border-white/20 bg-white px-4 py-3 text-sm text-[#17211C] outline-none"
-                  >
-                    <option value="">No mission selected</option>
-
-                    {missions
-                      .filter((mission) => mission.status === "planned")
-                      .map((mission) => (
-                        <option key={mission.id} value={mission.id}>
-                          {mission.title}
-                        </option>
-                      ))}
-                  </select>
-
-                  <input
-                    value={subject}
-                    onChange={(event) => setSubject(event.target.value)}
-                    placeholder="What are you working on?"
-                    className="mt-3 w-full rounded-xl border border-white/20 bg-white px-4 py-3 text-sm text-[#17211C] outline-none"
-                  />
-
-                  <button
-                    type="submit"
-                    className="mt-6 w-full rounded-xl bg-white px-5 py-3.5 text-sm font-semibold text-[#12352B] transition hover:bg-[#F0F2EF]"
-                  >
-                    Start focus
-                  </button>
-                </form>
-              )}
-            </section>
-          </aside>
-        </div>
-
-        <div className="mt-5">
-          <FocusAnalytics sessions={focusData.sessions} />
+          <FocusAnalytics sessions={focusSessions} />
         </div>
       </div>
     </section>

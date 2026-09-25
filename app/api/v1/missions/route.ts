@@ -1,33 +1,94 @@
+import { and, desc, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { missions } from "@/db/schema";
+import {
+  goals,
+  milestones,
+  missions,
+  projects,
+} from "@/db/schema";
 import { requireUser } from "@/lib/auth/require-user";
 
-const createMissionSchema = z.object({
+const missionSchema = z.object({
   title: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(1000).optional(),
+  description: z.string().trim().max(2000).optional(),
   dueAt: z.string().datetime().optional(),
+  milestoneId: z.string().uuid().nullable().optional(),
+  projectId: z.string().uuid().nullable().optional(),
 });
+
+async function getOwnedProject(
+  projectId: string,
+  userId: string,
+) {
+  const [project] = await db
+    .select({
+      id: projects.id,
+      milestoneId: projects.milestoneId,
+    })
+    .from(projects)
+    .innerJoin(
+      milestones,
+      eq(projects.milestoneId, milestones.id),
+    )
+    .innerJoin(goals, eq(milestones.goalId, goals.id))
+    .where(
+      and(
+        eq(projects.id, projectId),
+        eq(goals.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  return project ?? null;
+}
+
+async function getOwnedMilestone(
+  milestoneId: string,
+  userId: string,
+) {
+  const [milestone] = await db
+    .select({
+      id: milestones.id,
+    })
+    .from(milestones)
+    .innerJoin(goals, eq(milestones.goalId, goals.id))
+    .where(
+      and(
+        eq(milestones.id, milestoneId),
+        eq(goals.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  return milestone ?? null;
+}
 
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUser(request);
 
-    const data = await db
+    const userMissions = await db
       .select()
       .from(missions)
       .where(eq(missions.userId, user.id))
       .orderBy(desc(missions.createdAt));
 
-    return NextResponse.json(data);
+    return NextResponse.json(userMissions);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
 
+    if (message === "USER_NOT_FOUND") {
+      return NextResponse.json(
+        { error: "User not found" },
+        { status: 404 },
+      );
+    }
+
     return NextResponse.json(
-      { error: message === "USER_NOT_FOUND" ? "User not found" : "Unauthorized" },
-      { status: message === "USER_NOT_FOUND" ? 404 : 401 },
+      { error: "Unauthorized" },
+      { status: 401 },
     );
   }
 }
@@ -35,15 +96,62 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser(request);
-    const body = createMissionSchema.parse(await request.json());
+    const body = missionSchema.parse(await request.json());
+
+    let milestoneId = body.milestoneId ?? null;
+
+    if (body.projectId) {
+      const project = await getOwnedProject(
+        body.projectId,
+        user.id,
+      );
+
+      if (!project) {
+        return NextResponse.json(
+          { error: "Project not found" },
+          { status: 404 },
+        );
+      }
+
+      if (
+        body.milestoneId &&
+        body.milestoneId !== project.milestoneId
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Project does not belong to the selected milestone",
+          },
+          { status: 400 },
+        );
+      }
+
+      milestoneId = project.milestoneId;
+    } else if (milestoneId) {
+      const milestone = await getOwnedMilestone(
+        milestoneId,
+        user.id,
+      );
+
+      if (!milestone) {
+        return NextResponse.json(
+          { error: "Milestone not found" },
+          { status: 404 },
+        );
+      }
+    }
 
     const [mission] = await db
       .insert(missions)
       .values({
         userId: user.id,
+        milestoneId,
+        projectId: body.projectId ?? null,
         title: body.title,
         description: body.description || null,
-        dueAt: body.dueAt ? new Date(body.dueAt) : null,
+        dueAt: body.dueAt
+          ? new Date(body.dueAt)
+          : null,
       })
       .returning();
 
@@ -56,11 +164,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const message = error instanceof Error ? error.message : "";
+    if (error instanceof Error) {
+      if (error.message === "UNAUTHORIZED") {
+        return NextResponse.json(
+          { error: "Unauthorized" },
+          { status: 401 },
+        );
+      }
+
+      if (error.message === "USER_NOT_FOUND") {
+        return NextResponse.json(
+          { error: "User not found" },
+          { status: 404 },
+        );
+      }
+    }
 
     return NextResponse.json(
-      { error: message === "USER_NOT_FOUND" ? "User not found" : "Unauthorized" },
-      { status: message === "USER_NOT_FOUND" ? 404 : 401 },
+      { error: "Failed to create mission" },
+      { status: 500 },
     );
   }
 }

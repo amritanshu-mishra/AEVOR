@@ -2,27 +2,21 @@ import { and, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
-import {
-  goals,
-  milestones,
-  missions,
-  projects,
-} from "@/db/schema";
+import { goals, milestones, projects } from "@/db/schema";
 import { requireUser } from "@/lib/auth/require-user";
 
-const updateMissionSchema = z.object({
+const updateProjectSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().max(2000).nullable().optional(),
-  status: z.enum(["planned", "completed", "cancelled"]).optional(),
-  dueAt: z.string().datetime().nullable().optional(),
-  milestoneId: z.string().uuid().nullable().optional(),
-  projectId: z.string().uuid().nullable().optional(),
+  status: z
+    .enum(["active", "completed", "paused", "archived"])
+    .optional(),
+  targetDate: z.string().datetime().nullable().optional(),
+  position: z.number().int().min(0).optional(),
+  milestoneId: z.string().uuid().optional(),
 });
 
-async function getOwnedProject(
-  projectId: string,
-  userId: string,
-) {
+async function userOwnsProject(projectId: string, userId: string) {
   const [project] = await db
     .select({
       id: projects.id,
@@ -45,7 +39,7 @@ async function getOwnedProject(
   return project ?? null;
 }
 
-async function getOwnedMilestone(
+async function userOwnsMilestone(
   milestoneId: string,
   userId: string,
 ) {
@@ -73,62 +67,19 @@ export async function PATCH(
   try {
     const user = await requireUser(request);
     const { id } = await params;
-    const body = updateMissionSchema.parse(await request.json());
+    const body = updateProjectSchema.parse(await request.json());
 
-    const [existingMission] = await db
-      .select({
-        id: missions.id,
-      })
-      .from(missions)
-      .where(
-        and(
-          eq(missions.id, id),
-          eq(missions.userId, user.id),
-        ),
-      )
-      .limit(1);
+    const project = await userOwnsProject(id, user.id);
 
-    if (!existingMission) {
+    if (!project) {
       return NextResponse.json(
-        { error: "Mission not found" },
+        { error: "Project not found" },
         { status: 404 },
       );
     }
 
-    let milestoneId = body.milestoneId;
-
-    if (body.projectId) {
-      const project = await getOwnedProject(
-        body.projectId,
-        user.id,
-      );
-
-      if (!project) {
-        return NextResponse.json(
-          { error: "Project not found" },
-          { status: 404 },
-        );
-      }
-
-      if (
-        body.milestoneId &&
-        body.milestoneId !== project.milestoneId
-      ) {
-        return NextResponse.json(
-          {
-            error:
-              "Project does not belong to the selected milestone",
-          },
-          { status: 400 },
-        );
-      }
-
-      milestoneId = project.milestoneId;
-    } else if (
-      body.milestoneId !== undefined &&
-      body.milestoneId !== null
-    ) {
-      const milestone = await getOwnedMilestone(
+    if (body.milestoneId) {
+      const milestone = await userOwnsMilestone(
         body.milestoneId,
         user.id,
       );
@@ -141,8 +92,8 @@ export async function PATCH(
       }
     }
 
-    const [mission] = await db
-      .update(missions)
+    const [updatedProject] = await db
+      .update(projects)
       .set({
         ...(body.title !== undefined && {
           title: body.title,
@@ -156,37 +107,30 @@ export async function PATCH(
           status: body.status,
         }),
 
-        ...(body.dueAt !== undefined && {
-          dueAt: body.dueAt
-            ? new Date(body.dueAt)
+        ...(body.targetDate !== undefined && {
+          targetDate: body.targetDate
+            ? new Date(body.targetDate)
             : null,
         }),
 
-        ...(body.milestoneId !== undefined &&
-          !body.projectId && {
-            milestoneId: body.milestoneId,
-          }),
+        ...(body.position !== undefined && {
+          position: body.position,
+        }),
 
-        ...(body.projectId !== undefined && {
-          projectId: body.projectId,
-          milestoneId,
+        ...(body.milestoneId !== undefined && {
+          milestoneId: body.milestoneId,
         }),
 
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(missions.id, id),
-          eq(missions.userId, user.id),
-        ),
-      )
+      .where(eq(projects.id, id))
       .returning();
 
-    return NextResponse.json(mission);
+    return NextResponse.json(updatedProject);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: "Invalid mission data" },
+        { error: "Invalid project data" },
         { status: 400 },
       );
     }
@@ -208,7 +152,53 @@ export async function PATCH(
     }
 
     return NextResponse.json(
-      { error: "Failed to update mission" },
+      { error: "Failed to update project" },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const user = await requireUser(request);
+    const { id } = await params;
+
+    const project = await userOwnsProject(id, user.id);
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Project not found" },
+        { status: 404 },
+      );
+    }
+
+    await db
+      .delete(projects)
+      .where(eq(projects.id, id));
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "UNAUTHORIZED") {
+        return NextResponse.json(
+          { error: "Unauthorized" },
+          { status: 401 },
+        );
+      }
+
+      if (error.message === "USER_NOT_FOUND") {
+        return NextResponse.json(
+          { error: "User not found" },
+          { status: 404 },
+        );
+      }
+    }
+
+    return NextResponse.json(
+      { error: "Failed to delete project" },
       { status: 500 },
     );
   }
