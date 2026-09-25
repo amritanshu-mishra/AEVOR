@@ -17,6 +17,21 @@ type ProjectStatus =
   | "paused"
   | "archived";
 
+type Project = {
+  id: string;
+  milestoneId: string;
+  title: string;
+  description: string | null;
+  status: ProjectStatus;
+  targetDate: string | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+  progress: number;
+  totalMissions: number;
+  completedMissions: number;
+};
+
 type Milestone = {
   id: string;
   goalId: string;
@@ -30,6 +45,9 @@ type Milestone = {
   progress: number;
   totalMissions: number;
   completedMissions: number;
+  projectCount: number;
+  completedProjects: number;
+  projects: Project[];
 };
 
 type Goal = {
@@ -44,18 +62,6 @@ type Goal = {
   milestoneCount: number;
   completedMilestones: number;
   milestones: Milestone[];
-};
-
-type Project = {
-  id: string;
-  milestoneId: string;
-  title: string;
-  description: string | null;
-  status: ProjectStatus;
-  targetDate: string | null;
-  position: number;
-  createdAt: string;
-  updatedAt: string;
 };
 
 type ProgressResponse = {
@@ -96,7 +102,6 @@ function formatDate(date: string | null) {
 
 export default function GoalsPage() {
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [overallProgress, setOverallProgress] = useState(0);
 
   const [title, setTitle] = useState("");
@@ -122,24 +127,16 @@ export default function GoalsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void Promise.all([
-      apiFetch("/api/v1/progress"),
-      apiFetch("/api/v1/projects"),
-    ])
-      .then(async ([progressResponse, projectsResponse]) => {
-        if (!progressResponse.ok || !projectsResponse.ok) {
-          throw new Error("Failed to load goals");
+    void apiFetch("/api/v1/progress")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to load progress");
         }
 
-        const [progressData, projectData] =
-          await Promise.all([
-            progressResponse.json() as Promise<ProgressResponse>,
-            projectsResponse.json() as Promise<Project[]>,
-          ]);
+        const data: ProgressResponse = await response.json();
 
-        setGoals(progressData.goals);
-        setOverallProgress(progressData.overallProgress);
-        setProjects(projectData);
+        setGoals(data.goals);
+        setOverallProgress(data.overallProgress);
       })
       .catch(() => {
         setError("Unable to load your goals.");
@@ -149,25 +146,17 @@ export default function GoalsPage() {
       });
   }, []);
 
-  async function refreshData() {
-    const [progressResponse, projectsResponse] =
-      await Promise.all([
-        apiFetch("/api/v1/progress"),
-        apiFetch("/api/v1/projects"),
-      ]);
+  async function refreshProgress() {
+    const response = await apiFetch("/api/v1/progress");
 
-    if (!progressResponse.ok || !projectsResponse.ok) {
-      throw new Error("Failed to refresh goals");
+    if (!response.ok) {
+      throw new Error("Failed to refresh progress");
     }
 
-    const [progressData, projectData] = await Promise.all([
-      progressResponse.json() as Promise<ProgressResponse>,
-      projectsResponse.json() as Promise<Project[]>,
-    ]);
+    const data: ProgressResponse = await response.json();
 
-    setGoals(progressData.goals);
-    setOverallProgress(progressData.overallProgress);
-    setProjects(projectData);
+    setGoals(data.goals);
+    setOverallProgress(data.overallProgress);
   }
 
   async function createGoal(event: FormEvent<HTMLFormElement>) {
@@ -197,7 +186,7 @@ export default function GoalsPage() {
         throw new Error("Failed to create goal");
       }
 
-      await refreshData();
+      await refreshProgress();
 
       setTitle("");
       setDescription("");
@@ -225,7 +214,7 @@ export default function GoalsPage() {
         throw new Error("Failed to update goal");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to update the goal.");
     }
@@ -243,7 +232,7 @@ export default function GoalsPage() {
         throw new Error("Failed to delete goal");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to delete the goal.");
     }
@@ -283,7 +272,7 @@ export default function GoalsPage() {
         throw new Error("Failed to create milestone");
       }
 
-      await refreshData();
+      await refreshProgress();
 
       setMilestoneDrafts((current) => ({
         ...current,
@@ -315,7 +304,7 @@ export default function GoalsPage() {
         throw new Error("Failed to update milestone");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to update the milestone.");
     }
@@ -333,7 +322,7 @@ export default function GoalsPage() {
         throw new Error("Failed to delete milestone");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to delete the milestone.");
     }
@@ -341,20 +330,16 @@ export default function GoalsPage() {
 
   async function createProject(
     event: FormEvent<HTMLFormElement>,
-    milestoneId: string,
+    milestone: Milestone,
   ) {
     event.preventDefault();
 
-    const projectTitle = projectDrafts[milestoneId]?.trim();
+    const projectTitle = projectDrafts[milestone.id]?.trim();
 
     if (!projectTitle) return;
 
-    const milestoneProjects = projects.filter(
-      (project) => project.milestoneId === milestoneId,
-    );
-
     try {
-      setCreatingProject(milestoneId);
+      setCreatingProject(milestone.id);
       setError("");
 
       const response = await apiFetch("/api/v1/projects", {
@@ -363,9 +348,9 @@ export default function GoalsPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          milestoneId,
+          milestoneId: milestone.id,
           title: projectTitle,
-          position: milestoneProjects.length,
+          position: milestone.projects.length,
         }),
       });
 
@@ -373,11 +358,11 @@ export default function GoalsPage() {
         throw new Error("Failed to create project");
       }
 
-      await refreshData();
+      await refreshProgress();
 
       setProjectDrafts((current) => ({
         ...current,
-        [milestoneId]: "",
+        [milestone.id]: "",
       }));
     } catch {
       setError("Unable to create the project.");
@@ -405,7 +390,7 @@ export default function GoalsPage() {
         throw new Error("Failed to update project");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to update the project.");
     }
@@ -423,7 +408,7 @@ export default function GoalsPage() {
         throw new Error("Failed to delete project");
       }
 
-      await refreshData();
+      await refreshProgress();
     } catch {
       setError("Unable to delete the project.");
     }
@@ -449,8 +434,7 @@ export default function GoalsPage() {
         </h1>
 
         <p className="mt-4 max-w-2xl text-[#5E6963]">
-          Define what matters, then turn it into measurable
-          execution.
+          Define what matters, then turn it into measurable execution.
         </p>
       </header>
 
@@ -549,8 +533,8 @@ export default function GoalsPage() {
                 </h2>
 
                 <p className="mt-2 text-sm text-[#5E6963]">
-                  Create your first goal and connect it to your
-                  daily work.
+                  Create your first goal and connect it to your daily
+                  work.
                 </p>
               </div>
             ) : (
@@ -701,201 +685,200 @@ export default function GoalsPage() {
                             (a, b) =>
                               a.position - b.position,
                           )
-                          .map((milestone) => {
-                            const milestoneProjects =
-                              projects
-                                .filter(
-                                  (project) =>
-                                    project.milestoneId ===
-                                    milestone.id,
-                                )
-                                .sort(
-                                  (a, b) =>
-                                    a.position - b.position,
-                                );
+                          .map((milestone) => (
+                            <div
+                              key={milestone.id}
+                              className="rounded-xl bg-[#F7F8F6] p-4"
+                            >
+                              <div className="flex items-start gap-3">
+                                <div
+                                  className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                                    milestone.status ===
+                                    "completed"
+                                      ? "bg-[#2F7D5B]"
+                                      : "bg-[#B99A5B]"
+                                  }`}
+                                />
 
-                            return (
-                              <div
-                                key={milestone.id}
-                                className="rounded-xl bg-[#F7F8F6] p-4"
-                              >
-                                <div className="flex items-start gap-3">
-                                  <div
-                                    className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                                      milestone.status ===
-                                      "completed"
-                                        ? "bg-[#2F7D5B]"
-                                        : "bg-[#B99A5B]"
-                                    }`}
-                                  />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                      <p
+                                        className={`text-sm font-medium ${
+                                          milestone.status ===
+                                          "completed"
+                                            ? "text-[#89918C] line-through"
+                                            : "text-[#12352B]"
+                                        }`}
+                                      >
+                                        {milestone.title}
+                                      </p>
 
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                      <div>
-                                        <p
-                                          className={`text-sm font-medium ${
-                                            milestone.status ===
-                                            "completed"
-                                              ? "text-[#89918C] line-through"
-                                              : "text-[#12352B]"
-                                          }`}
-                                        >
-                                          {milestone.title}
-                                        </p>
+                                      <p className="mt-1 text-xs text-[#89918C]">
+                                        {
+                                          milestoneStatusLabel[
+                                            milestone.status
+                                          ]
+                                        }{" "}
+                                        ·{" "}
+                                        {
+                                          milestone.completedMissions
+                                        }{" "}
+                                        of{" "}
+                                        {
+                                          milestone.totalMissions
+                                        }{" "}
+                                        missions ·{" "}
+                                        {milestone.projectCount}{" "}
+                                        project
+                                        {milestone.projectCount ===
+                                        1
+                                          ? ""
+                                          : "s"}
+                                      </p>
+                                    </div>
 
-                                        <p className="mt-1 text-xs text-[#89918C]">
-                                          {
-                                            milestoneStatusLabel[
-                                              milestone.status
-                                            ]
-                                          }{" "}
-                                          ·{" "}
-                                          {
-                                            milestone.completedMissions
-                                          }{" "}
-                                          of{" "}
-                                          {
-                                            milestone.totalMissions
-                                          }{" "}
-                                          missions
-                                        </p>
-                                      </div>
-
-                                      <div className="flex shrink-0 flex-wrap gap-2">
-                                        {milestone.status ===
-                                          "active" && (
-                                          <>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                void updateMilestone(
-                                                  milestone.id,
-                                                  "completed",
-                                                )
-                                              }
-                                              className="text-xs font-semibold text-[#12352B] hover:underline"
-                                            >
-                                              Complete
-                                            </button>
-
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                void updateMilestone(
-                                                  milestone.id,
-                                                  "paused",
-                                                )
-                                              }
-                                              className="text-xs font-semibold text-[#5E6963] hover:underline"
-                                            >
-                                              Pause
-                                            </button>
-                                          </>
-                                        )}
-
-                                        {milestone.status ===
-                                          "paused" && (
+                                    <div className="flex shrink-0 flex-wrap gap-2">
+                                      {milestone.status ===
+                                        "active" && (
+                                        <>
                                           <button
                                             type="button"
                                             onClick={() =>
                                               void updateMilestone(
                                                 milestone.id,
-                                                "active",
+                                                "completed",
                                               )
                                             }
                                             className="text-xs font-semibold text-[#12352B] hover:underline"
                                           >
-                                            Resume
+                                            Complete
                                           </button>
-                                        )}
 
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void updateMilestone(
+                                                milestone.id,
+                                                "paused",
+                                              )
+                                            }
+                                            className="text-xs font-semibold text-[#5E6963] hover:underline"
+                                          >
+                                            Pause
+                                          </button>
+                                        </>
+                                      )}
+
+                                      {milestone.status ===
+                                        "paused" && (
                                         <button
                                           type="button"
                                           onClick={() =>
-                                            void deleteMilestone(
+                                            void updateMilestone(
                                               milestone.id,
+                                              "active",
                                             )
                                           }
-                                          className="text-xs font-semibold text-red-600 hover:underline"
+                                          className="text-xs font-semibold text-[#12352B] hover:underline"
                                         >
-                                          Delete
+                                          Resume
                                         </button>
-                                      </div>
-                                    </div>
-
-                                    <div className="mt-3 flex items-center gap-3">
-                                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#E5E9E5]">
-                                        <div
-                                          className="h-full rounded-full bg-[#2F7D5B] transition-all"
-                                          style={{
-                                            width: `${milestone.progress}%`,
-                                          }}
-                                        />
-                                      </div>
-
-                                      <span className="w-10 text-right text-xs font-semibold text-[#12352B]">
-                                        {milestone.progress}%
-                                      </span>
-                                    </div>
-
-                                    <form
-                                      onSubmit={(event) =>
-                                        void createProject(
-                                          event,
-                                          milestone.id,
-                                        )
-                                      }
-                                      className="mt-4 flex gap-2"
-                                    >
-                                      <input
-                                        value={
-                                          projectDrafts[
-                                            milestone.id
-                                          ] ?? ""
-                                        }
-                                        onChange={(event) =>
-                                          setProjectDrafts(
-                                            (current) => ({
-                                              ...current,
-                                              [milestone.id]:
-                                                event.target
-                                                  .value,
-                                            }),
-                                          )
-                                        }
-                                        placeholder="Add a project..."
-                                        className="min-w-0 flex-1 rounded-lg border border-[#DDE2DE] bg-white px-3 py-2 text-xs outline-none focus:border-[#12352B]"
-                                      />
+                                      )}
 
                                       <button
-                                        type="submit"
-                                        disabled={
-                                          creatingProject ===
-                                            milestone.id ||
-                                          !projectDrafts[
-                                            milestone.id
-                                          ]?.trim()
+                                        type="button"
+                                        onClick={() =>
+                                          void deleteMilestone(
+                                            milestone.id,
+                                          )
                                         }
-                                        className="rounded-lg border border-[#C8D0CA] px-3 py-2 text-xs font-semibold text-[#12352B] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                                        className="text-xs font-semibold text-red-600 hover:underline"
                                       >
-                                        {creatingProject ===
-                                        milestone.id
-                                          ? "Adding..."
-                                          : "Add"}
+                                        Delete
                                       </button>
-                                    </form>
+                                    </div>
+                                  </div>
 
-                                    {milestoneProjects.length >
-                                      0 && (
-                                      <div className="mt-4 space-y-2 border-l border-[#DDE2DE] pl-4">
-                                        {milestoneProjects.map(
-                                          (project) => (
-                                            <div
-                                              key={project.id}
-                                              className="rounded-lg bg-white px-3 py-3"
-                                            >
-                                              <div className="flex items-start justify-between gap-3">
-                                                <div className="min-w-0">
+                                  <div className="mt-3 flex items-center gap-3">
+                                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#E5E9E5]">
+                                      <div
+                                        className="h-full rounded-full bg-[#2F7D5B] transition-all"
+                                        style={{
+                                          width: `${milestone.progress}%`,
+                                        }}
+                                      />
+                                    </div>
+
+                                    <span className="w-10 text-right text-xs font-semibold text-[#12352B]">
+                                      {milestone.progress}%
+                                    </span>
+                                  </div>
+
+                                  <form
+                                    onSubmit={(event) =>
+                                      void createProject(
+                                        event,
+                                        milestone,
+                                      )
+                                    }
+                                    className="mt-4 flex gap-2"
+                                  >
+                                    <input
+                                      value={
+                                        projectDrafts[
+                                          milestone.id
+                                        ] ?? ""
+                                      }
+                                      onChange={(event) =>
+                                        setProjectDrafts(
+                                          (current) => ({
+                                            ...current,
+                                            [milestone.id]:
+                                              event.target
+                                                .value,
+                                          }),
+                                        )
+                                      }
+                                      placeholder="Add a project..."
+                                      className="min-w-0 flex-1 rounded-lg border border-[#DDE2DE] bg-white px-3 py-2 text-xs outline-none focus:border-[#12352B]"
+                                    />
+
+                                    <button
+                                      type="submit"
+                                      disabled={
+                                        creatingProject ===
+                                          milestone.id ||
+                                        !projectDrafts[
+                                          milestone.id
+                                        ]?.trim()
+                                      }
+                                      className="rounded-lg border border-[#C8D0CA] px-3 py-2 text-xs font-semibold text-[#12352B] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      {creatingProject ===
+                                      milestone.id
+                                        ? "Adding..."
+                                        : "Add"}
+                                    </button>
+                                  </form>
+
+                                  {milestone.projects.length >
+                                    0 && (
+                                    <div className="mt-4 space-y-2 border-l border-[#DDE2DE] pl-4">
+                                      {[...milestone.projects]
+                                        .sort(
+                                          (a, b) =>
+                                            a.position -
+                                            b.position,
+                                        )
+                                        .map((project) => (
+                                          <div
+                                            key={project.id}
+                                            className="rounded-lg bg-white px-3 py-3"
+                                          >
+                                            <div className="flex items-start justify-between gap-3">
+                                              <div className="min-w-0 flex-1">
+                                                <div className="flex items-center justify-between gap-3">
                                                   <p
                                                     className={`text-sm font-medium ${
                                                       project.status ===
@@ -909,90 +892,110 @@ export default function GoalsPage() {
                                                     }
                                                   </p>
 
-                                                  <p className="mt-1 text-xs text-[#89918C]">
+                                                  <span className="shrink-0 text-xs font-semibold text-[#12352B]">
                                                     {
-                                                      projectStatusLabel[
-                                                        project.status
-                                                      ]
-                                                    }{" "}
-                                                    · Target:{" "}
-                                                    {formatDate(
-                                                      project.targetDate,
-                                                    )}
-                                                  </p>
+                                                      project.progress
+                                                    }
+                                                    %
+                                                  </span>
                                                 </div>
 
-                                                <div className="flex shrink-0 gap-2">
-                                                  {project.status ===
-                                                    "active" && (
-                                                    <>
-                                                      <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                          void updateProject(
-                                                            project.id,
-                                                            "completed",
-                                                          )
-                                                        }
-                                                        className="text-xs font-semibold text-[#12352B] hover:underline"
-                                                      >
-                                                        Complete
-                                                      </button>
+                                                <p className="mt-1 text-xs text-[#89918C]">
+                                                  {
+                                                    projectStatusLabel[
+                                                      project.status
+                                                    ]
+                                                  }{" "}
+                                                  ·{" "}
+                                                  {
+                                                    project.completedMissions
+                                                  }{" "}
+                                                  of{" "}
+                                                  {
+                                                    project.totalMissions
+                                                  }{" "}
+                                                  missions
+                                                </p>
 
-                                                      <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                          void updateProject(
-                                                            project.id,
-                                                            "paused",
-                                                          )
-                                                        }
-                                                        className="text-xs font-semibold text-[#5E6963] hover:underline"
-                                                      >
-                                                        Pause
-                                                      </button>
-                                                    </>
-                                                  )}
+                                                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#E5E9E5]">
+                                                  <div
+                                                    className="h-full rounded-full bg-[#B99A5B] transition-all"
+                                                    style={{
+                                                      width: `${project.progress}%`,
+                                                    }}
+                                                  />
+                                                </div>
+                                              </div>
 
-                                                  {project.status ===
-                                                    "paused" && (
+                                              <div className="flex shrink-0 gap-2">
+                                                {project.status ===
+                                                  "active" && (
+                                                  <>
                                                     <button
                                                       type="button"
                                                       onClick={() =>
                                                         void updateProject(
                                                           project.id,
-                                                          "active",
+                                                          "completed",
                                                         )
                                                       }
                                                       className="text-xs font-semibold text-[#12352B] hover:underline"
                                                     >
-                                                      Resume
+                                                      Complete
                                                     </button>
-                                                  )}
 
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        void updateProject(
+                                                          project.id,
+                                                          "paused",
+                                                        )
+                                                      }
+                                                      className="text-xs font-semibold text-[#5E6963] hover:underline"
+                                                    >
+                                                      Pause
+                                                    </button>
+                                                  </>
+                                                )}
+
+                                                {project.status ===
+                                                  "paused" && (
                                                   <button
                                                     type="button"
                                                     onClick={() =>
-                                                      void deleteProject(
+                                                      void updateProject(
                                                         project.id,
+                                                        "active",
                                                       )
                                                     }
-                                                    className="text-xs font-semibold text-red-600 hover:underline"
+                                                    className="text-xs font-semibold text-[#12352B] hover:underline"
                                                   >
-                                                    Delete
+                                                    Resume
                                                   </button>
-                                                </div>
+                                                )}
+
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    void deleteProject(
+                                                      project.id,
+                                                    )
+                                                  }
+                                                  className="text-xs font-semibold text-red-600 hover:underline"
+                                                >
+                                                  Delete
+                                                </button>
                                               </div>
                                             </div>
-                                          ),
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
+                                          </div>
+                                        ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
-                            );
-                          })}
+                            </div>
+                          ))}
                       </div>
                     )}
                   </div>

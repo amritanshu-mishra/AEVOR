@@ -1,15 +1,23 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { apiFetch } from "@/lib/api/client";
 import FocusAnalytics from "@/components/aevor/FocusAnalytics";
+import { apiFetch } from "@/lib/api/client";
 
 type GoalStatus = "active" | "completed" | "paused" | "archived";
+
 type MilestoneStatus =
   | "active"
   | "completed"
   | "paused"
   | "archived";
+
+type ProjectStatus =
+  | "active"
+  | "completed"
+  | "paused"
+  | "archived";
+
 type MissionStatus = "planned" | "completed" | "cancelled";
 
 type Goal = {
@@ -25,6 +33,13 @@ type Milestone = {
   status: MilestoneStatus;
 };
 
+type Project = {
+  id: string;
+  milestoneId: string;
+  title: string;
+  status: ProjectStatus;
+};
+
 type Mission = {
   id: string;
   title: string;
@@ -32,6 +47,7 @@ type Mission = {
   dueAt: string | null;
   status: MissionStatus;
   milestoneId: string | null;
+  projectId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -46,6 +62,11 @@ type FocusSession = {
   durationSeconds: number;
   status: "active" | "completed" | "cancelled";
   createdAt: string;
+};
+
+type FocusResponse = {
+  sessions: FocusSession[];
+  active: FocusSession | null;
 };
 
 function formatTime(seconds: number) {
@@ -74,14 +95,22 @@ export default function ExecutePage() {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
-  const [focusSessions, setFocusSessions] = useState<FocusSession[]>([]);
-  const [activeFocus, setActiveFocus] = useState<FocusSession | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [focusSessions, setFocusSessions] = useState<FocusSession[]>(
+    [],
+  );
+  const [activeFocus, setActiveFocus] =
+    useState<FocusSession | null>(null);
 
   const [missionTitle, setMissionTitle] = useState("");
-  const [missionDescription, setMissionDescription] = useState("");
+  const [missionDescription, setMissionDescription] =
+    useState("");
   const [missionDueAt, setMissionDueAt] = useState("");
+
   const [selectedGoalId, setSelectedGoalId] = useState("");
-  const [selectedMilestoneId, setSelectedMilestoneId] = useState("");
+  const [selectedMilestoneId, setSelectedMilestoneId] =
+    useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
 
   const [focusSubject, setFocusSubject] = useState("");
   const [selectedFocusMissionId, setSelectedFocusMissionId] =
@@ -104,6 +133,16 @@ export default function ExecutePage() {
     [milestones, selectedGoalId],
   );
 
+  const availableProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          project.milestoneId === selectedMilestoneId &&
+          project.status === "active",
+      ),
+    [projects, selectedMilestoneId],
+  );
+
   const goalById = useMemo(
     () => new Map(goals.map((goal) => [goal.id, goal])),
     [goals],
@@ -115,6 +154,12 @@ export default function ExecutePage() {
         milestones.map((milestone) => [milestone.id, milestone]),
       ),
     [milestones],
+  );
+
+  const projectById = useMemo(
+    () =>
+      new Map(projects.map((project) => [project.id, project])),
+    [projects],
   );
 
   const selectedFocusMission = missions.find(
@@ -136,34 +181,51 @@ export default function ExecutePage() {
       apiFetch("/api/v1/missions"),
       apiFetch("/api/v1/goals"),
       apiFetch("/api/v1/milestones"),
+      apiFetch("/api/v1/projects"),
       apiFetch("/api/v1/focus"),
     ])
-      .then(async ([missionsResponse, goalsResponse, milestonesResponse, focusResponse]) => {
-        if (
-          !missionsResponse.ok ||
-          !goalsResponse.ok ||
-          !milestonesResponse.ok ||
-          !focusResponse.ok
-        ) {
-          throw new Error("Failed to load execution data");
-        }
+      .then(
+        async ([
+          missionsResponse,
+          goalsResponse,
+          milestonesResponse,
+          projectsResponse,
+          focusResponse,
+        ]) => {
+          if (
+            !missionsResponse.ok ||
+            !goalsResponse.ok ||
+            !milestonesResponse.ok ||
+            !projectsResponse.ok ||
+            !focusResponse.ok
+          ) {
+            throw new Error("Failed to load execution data");
+          }
 
-        const [missionData, goalData, milestoneData, focusData] =
-          await Promise.all([
-            missionsResponse.json(),
-            goalsResponse.json(),
-            milestonesResponse.json(),
-            focusResponse.json(),
+          const [
+            missionData,
+            goalData,
+            milestoneData,
+            projectData,
+            focusData,
+          ] = await Promise.all([
+            missionsResponse.json() as Promise<Mission[]>,
+            goalsResponse.json() as Promise<Goal[]>,
+            milestonesResponse.json() as Promise<Milestone[]>,
+            projectsResponse.json() as Promise<Project[]>,
+            focusResponse.json() as Promise<FocusResponse>,
           ]);
 
-        if (cancelled) return;
+          if (cancelled) return;
 
-        setMissions(missionData);
-        setGoals(goalData);
-        setMilestones(milestoneData);
-        setFocusSessions(focusData.sessions);
-        setActiveFocus(focusData.active);
-      })
+          setMissions(missionData);
+          setGoals(goalData);
+          setMilestones(milestoneData);
+          setProjects(projectData);
+          setFocusSessions(focusData.sessions);
+          setActiveFocus(focusData.active);
+        },
+      )
       .catch(() => {
         if (!cancelled) {
           setError("Unable to load your execution data.");
@@ -184,7 +246,9 @@ export default function ExecutePage() {
     if (!activeFocus) return;
 
     const interval = window.setInterval(() => {
-      const startedAt = new Date(activeFocus.startedAt).getTime();
+      const startedAt = new Date(
+        activeFocus.startedAt,
+      ).getTime();
 
       setElapsed(
         Math.max(
@@ -197,7 +261,9 @@ export default function ExecutePage() {
     return () => window.clearInterval(interval);
   }, [activeFocus]);
 
-  async function createMission(event: FormEvent<HTMLFormElement>) {
+  async function createMission(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
 
     if (!missionTitle.trim()) return;
@@ -213,11 +279,13 @@ export default function ExecutePage() {
         },
         body: JSON.stringify({
           title: missionTitle.trim(),
-          description: missionDescription.trim() || undefined,
+          description:
+            missionDescription.trim() || undefined,
           dueAt: missionDueAt
             ? new Date(missionDueAt).toISOString()
             : undefined,
           milestoneId: selectedMilestoneId || null,
+          projectId: selectedProjectId || null,
         }),
       });
 
@@ -228,11 +296,13 @@ export default function ExecutePage() {
       const mission: Mission = await response.json();
 
       setMissions((current) => [mission, ...current]);
+
       setMissionTitle("");
       setMissionDescription("");
       setMissionDueAt("");
       setSelectedGoalId("");
       setSelectedMilestoneId("");
+      setSelectedProjectId("");
     } catch {
       setError("Unable to create the mission.");
     } finally {
@@ -287,7 +357,8 @@ export default function ExecutePage() {
         },
         body: JSON.stringify({
           subject,
-          missionId: selectedFocusMissionId || undefined,
+          missionId:
+            selectedFocusMissionId || undefined,
         }),
       });
 
@@ -331,6 +402,7 @@ export default function ExecutePage() {
         completedSession,
         ...current,
       ]);
+
       setActiveFocus(null);
       setElapsed(0);
     } catch {
@@ -383,6 +455,7 @@ export default function ExecutePage() {
                 onChange={(event) => {
                   setSelectedGoalId(event.target.value);
                   setSelectedMilestoneId("");
+                  setSelectedProjectId("");
                 }}
                 className="w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm outline-none focus:border-[#12352B]"
               >
@@ -402,9 +475,12 @@ export default function ExecutePage() {
               {selectedGoalId && (
                 <select
                   value={selectedMilestoneId}
-                  onChange={(event) =>
-                    setSelectedMilestoneId(event.target.value)
-                  }
+                  onChange={(event) => {
+                    setSelectedMilestoneId(
+                      event.target.value,
+                    );
+                    setSelectedProjectId("");
+                  }}
                   className="w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm outline-none focus:border-[#12352B]"
                 >
                   <option value="">No milestone</option>
@@ -415,6 +491,27 @@ export default function ExecutePage() {
                       value={milestone.id}
                     >
                       {milestone.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {selectedMilestoneId && (
+                <select
+                  value={selectedProjectId}
+                  onChange={(event) =>
+                    setSelectedProjectId(event.target.value)
+                  }
+                  className="w-full rounded-xl border border-[#DDE2DE] bg-white px-4 py-3 text-sm outline-none focus:border-[#12352B]"
+                >
+                  <option value="">No project</option>
+
+                  {availableProjects.map((project) => (
+                    <option
+                      key={project.id}
+                      value={project.id}
+                    >
+                      {project.title}
                     </option>
                   ))}
                 </select>
@@ -489,6 +586,7 @@ export default function ExecutePage() {
 
             {activeFocus ? (
               <button
+                type="button"
                 onClick={() => void stopFocus()}
                 disabled={stoppingFocus}
                 className="mt-6 w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[#12352B] disabled:opacity-50"
@@ -542,6 +640,7 @@ export default function ExecutePage() {
                 </select>
 
                 <button
+                  type="button"
                   onClick={() => void startFocus()}
                   disabled={
                     startingFocus || !focusSubject.trim()
@@ -587,16 +686,14 @@ export default function ExecutePage() {
           </div>
 
           <div className="rounded-2xl border border-[#DDE2DE] bg-white p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold tracking-[0.18em] text-[#B99A5B]">
-                  MISSIONS
-                </p>
+            <div>
+              <p className="text-xs font-semibold tracking-[0.18em] text-[#B99A5B]">
+                MISSIONS
+              </p>
 
-                <h2 className="mt-2 text-xl font-semibold text-[#12352B]">
-                  What needs to be done
-                </h2>
-              </div>
+              <h2 className="mt-2 text-xl font-semibold text-[#12352B]">
+                What needs to be done
+              </h2>
             </div>
 
             <div className="mt-5 space-y-3">
@@ -616,6 +713,10 @@ export default function ExecutePage() {
                 </div>
               ) : (
                 missions.map((mission) => {
+                  const project = mission.projectId
+                    ? projectById.get(mission.projectId)
+                    : undefined;
+
                   const milestone = mission.milestoneId
                     ? milestoneById.get(mission.milestoneId)
                     : undefined;
@@ -705,6 +806,12 @@ export default function ExecutePage() {
                             {milestone && (
                               <span>
                                 Milestone: {milestone.title}
+                              </span>
+                            )}
+
+                            {project && (
+                              <span>
+                                Project: {project.title}
                               </span>
                             )}
 
