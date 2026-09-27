@@ -38,6 +38,11 @@ export const focusStatus = pgEnum("focus_status", [
   "cancelled",
 ]);
 
+export const proofType = pgEnum("proof_type", [
+  "note",
+  "url",
+]);
+
 /* ─────────────────────────────────────────────
    USERS
 ───────────────────────────────────────────── */
@@ -346,6 +351,52 @@ export const focusSessions = pgTable(
     index("focus_sessions_user_subject_idx").on(
       table.userId,
       table.subject,
+    ),
+  ],
+);
+
+export const proofs = pgTable(
+  "proofs",
+  {
+    id: uuid("id")
+      .defaultRandom()
+      .primaryKey(),
+
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+
+    missionId: uuid("mission_id")
+      .notNull()
+      .references(() => missions.id),
+
+    focusSessionId: uuid("focus_session_id")
+      .references(() => focusSessions.id),
+
+    type: proofType("type")
+      .notNull(),
+
+    title: text("title")
+      .notNull(),
+
+    content: text("content")
+      .notNull(),
+
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("proofs_user_mission_idx").on(
+      table.userId,
+      table.missionId,
+    ),
+
+    index("proofs_user_created_idx").on(
+      table.userId,
+      table.createdAt,
     ),
   ],
 );

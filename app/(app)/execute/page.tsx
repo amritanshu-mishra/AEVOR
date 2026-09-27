@@ -2,6 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import FocusAnalytics from "@/components/aevor/FocusAnalytics";
+import ProofSection, {
+  type Proof,
+} from "@/components/aevor/ProofSection";
 import { apiFetch } from "@/lib/api/client";
 
 type GoalStatus = "active" | "completed" | "paused" | "archived";
@@ -99,6 +102,7 @@ export default function ExecutePage() {
   const [focusSessions, setFocusSessions] = useState<FocusSession[]>(
     [],
   );
+  const [proofs, setProofs] = useState<Proof[]>([]);
   const [activeFocus, setActiveFocus] =
     useState<FocusSession | null>(null);
 
@@ -117,6 +121,7 @@ export default function ExecutePage() {
     useState("");
 
   const [elapsed, setElapsed] = useState(0);
+
   const [loading, setLoading] = useState(true);
   const [creatingMission, setCreatingMission] = useState(false);
   const [startingFocus, setStartingFocus] = useState(false);
@@ -174,48 +179,73 @@ export default function ExecutePage() {
     (mission) => mission.status === "completed",
   );
 
-  useEffect(() => {
-    let cancelled = false;
-
-    Promise.all([
+  const loadExecutionData = async () => {
+    const [
+      missionsResponse,
+      goalsResponse,
+      milestonesResponse,
+      projectsResponse,
+      focusResponse,
+      proofsResponse,
+    ] = await Promise.all([
       apiFetch("/api/v1/missions"),
       apiFetch("/api/v1/goals"),
       apiFetch("/api/v1/milestones"),
       apiFetch("/api/v1/projects"),
       apiFetch("/api/v1/focus"),
-    ])
+      apiFetch("/api/v1/proofs"),
+    ]);
+
+    if (
+      !missionsResponse.ok ||
+      !goalsResponse.ok ||
+      !milestonesResponse.ok ||
+      !projectsResponse.ok ||
+      !focusResponse.ok ||
+      !proofsResponse.ok
+    ) {
+      throw new Error("Failed to load execution data");
+    }
+
+    const [
+      missionData,
+      goalData,
+      milestoneData,
+      projectData,
+      focusData,
+      proofData,
+    ] = await Promise.all([
+      missionsResponse.json() as Promise<Mission[]>,
+      goalsResponse.json() as Promise<Goal[]>,
+      milestonesResponse.json() as Promise<Milestone[]>,
+      projectsResponse.json() as Promise<Project[]>,
+      focusResponse.json() as Promise<FocusResponse>,
+      proofsResponse.json() as Promise<Proof[]>,
+    ]);
+
+    return {
+      missionData,
+      goalData,
+      milestoneData,
+      projectData,
+      focusData,
+      proofData,
+    };
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadExecutionData()
       .then(
-        async ([
-          missionsResponse,
-          goalsResponse,
-          milestonesResponse,
-          projectsResponse,
-          focusResponse,
-        ]) => {
-          if (
-            !missionsResponse.ok ||
-            !goalsResponse.ok ||
-            !milestonesResponse.ok ||
-            !projectsResponse.ok ||
-            !focusResponse.ok
-          ) {
-            throw new Error("Failed to load execution data");
-          }
-
-          const [
-            missionData,
-            goalData,
-            milestoneData,
-            projectData,
-            focusData,
-          ] = await Promise.all([
-            missionsResponse.json() as Promise<Mission[]>,
-            goalsResponse.json() as Promise<Goal[]>,
-            milestonesResponse.json() as Promise<Milestone[]>,
-            projectsResponse.json() as Promise<Project[]>,
-            focusResponse.json() as Promise<FocusResponse>,
-          ]);
-
+        ({
+          missionData,
+          goalData,
+          milestoneData,
+          projectData,
+          focusData,
+          proofData,
+        }) => {
           if (cancelled) return;
 
           setMissions(missionData);
@@ -224,6 +254,7 @@ export default function ExecutePage() {
           setProjects(projectData);
           setFocusSessions(focusData.sessions);
           setActiveFocus(focusData.active);
+          setProofs(proofData);
         },
       )
       .catch(() => {
@@ -260,6 +291,18 @@ export default function ExecutePage() {
 
     return () => window.clearInterval(interval);
   }, [activeFocus]);
+
+  async function refreshExecutionData() {
+    const data = await loadExecutionData();
+
+    setMissions(data.missionData);
+    setGoals(data.goalData);
+    setMilestones(data.milestoneData);
+    setProjects(data.projectData);
+    setFocusSessions(data.focusData.sessions);
+    setActiveFocus(data.focusData.active);
+    setProofs(data.proofData);
+  }
 
   async function createMission(
     event: FormEvent<HTMLFormElement>,
@@ -591,7 +634,9 @@ export default function ExecutePage() {
                 disabled={stoppingFocus}
                 className="mt-6 w-full rounded-xl bg-white px-5 py-3 text-sm font-semibold text-[#12352B] disabled:opacity-50"
               >
-                {stoppingFocus ? "Stopping..." : "Stop focus"}
+                {stoppingFocus
+                  ? "Stopping..."
+                  : "Stop focus"}
               </button>
             ) : (
               <div className="mt-5 space-y-3">
@@ -728,6 +773,10 @@ export default function ExecutePage() {
                   const completed =
                     mission.status === "completed";
 
+                  const missionProofs = proofs.filter(
+                    (proof) => proof.missionId === mission.id,
+                  );
+
                   return (
                     <article
                       key={mission.id}
@@ -764,7 +813,7 @@ export default function ExecutePage() {
 
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
+                            <div className="min-w-0">
                               <h3
                                 className={`font-semibold ${
                                   completed
@@ -819,6 +868,25 @@ export default function ExecutePage() {
                               {formatDueAt(mission.dueAt)}
                             </span>
                           </div>
+
+                          <ProofSection
+                            missionId={mission.id}
+                            proofs={missionProofs}
+                            onProofCreated={(proof) =>
+                              setProofs((current) => [
+                                proof,
+                                ...current,
+                              ])
+                            }
+                            onProofDeleted={(id) =>
+                              setProofs((current) =>
+                                current.filter(
+                                  (proof) =>
+                                    proof.id !== id,
+                                ),
+                              )
+                            }
+                          />
                         </div>
                       </div>
                     </article>
